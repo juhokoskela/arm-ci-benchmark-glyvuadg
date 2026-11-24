@@ -62,7 +62,13 @@ jobs:
           echo "ARM_CACHE hit=${CACHE_HIT:-false} files=$files"
           if test "$PHASE" = measure; then
             test "$CACHE_HIT" = true
-            test "$files" -gt 100
+            backend=$(go env GOCACHEPROG)
+            echo "Go cache program: ${backend:-local}"
+            if [[ "$backend" == '/usr/local/bin/avrea-build-cache gocache' ]]; then
+              test -x /usr/local/bin/avrea-build-cache
+            else
+              test "$files" -gt 100
+            fi
           fi
       - name: Prepare PostgreSQL
         run: |
@@ -74,9 +80,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = 87cd5a17938c2b9b6036a4d37b0b583406989261
-          go test -count=1 -p 1 -race -json ./... > "$RUNNER_TEMP/tests" || { tail -80 "$RUNNER_TEMP/tests"; exit 1; }
-          go vet ./...
-          go build -trimpath -buildvcs=false -ldflags=-buildid= -o "$RUNNER_TEMP/server" ./cmd/glasseqserver
+          export GOFLAGS="${GOFLAGS:+$GOFLAGS }-x"
+          trace="$RUNNER_TEMP/go-trace"
+          go test -count=1 -p 1 -race -json ./... 2>"$trace" > "$RUNNER_TEMP/tests" || { tail -80 "$RUNNER_TEMP/tests"; exit 1; }
+          go vet ./... 2>>"$trace"
+          go build -trimpath -buildvcs=false -ldflags=-buildid= -o "$RUNNER_TEMP/server" ./cmd/glasseqserver 2>>"$trace"
+          echo "ARM_COMPILES $(grep -Ec '/pkg/tool/[^ ]*/compile ' "$trace" || true)"
           python3 -c 'import json,sys; print("\n".join(x["Package"]+"\t"+x["Test"] for x in map(json.loads,sys.stdin) if x.get("Action")=="pass" and x.get("Test")))' < "$RUNNER_TEMP/tests" | LC_ALL=C sort > "$RUNNER_TEMP/names"
           count=$(wc -l < "$RUNNER_TEMP/names")
           test "$count" -gt 350
